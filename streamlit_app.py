@@ -52,5 +52,7 @@ if query:
             with st.expander(f"Sources ({len(result['sources'])})"):
                 for src, page in result["sources"]:
                     st.markdown(f"- **{src}**, p.{page}")
+        if result["backend"]:
+            st.caption(f"Answered via {result['backend']}")
 
     st.session_state.messages.append({"role": "assistant", "content": result["answer"]})

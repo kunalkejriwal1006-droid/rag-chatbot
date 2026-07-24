@@ -111,20 +111,26 @@ def _call_ollama(prompt: str) -> str:
 # LLM call abstraction with dynamic fallback
 # ---------------------------------------------------------------------------
 
-def _call_llm(prompt: str) -> str:
-    """Try to get response using configured backends in order of fallback list."""
+def _call_llm(prompt: str) -> tuple[str, str]:
+    """Try to get a response using configured backends in fallback order.
+
+    Returns (answer_text, backend_name) so callers can surface which backend
+    actually answered -- otherwise a silent Gemini quota failure looks
+    identical to a normal Gemini answer, which makes debugging fallback
+    behavior (and its very different latency/quality per backend) opaque.
+    """
     errors = []
     for backend in config.LLM_FALLBACK_ORDER:
         try:
             if backend == "gemini":
                 logger.info(f"Attempting LLM call via Gemini ({config.GEMINI_MODEL})...")
-                return _call_gemini(prompt)
+                return _call_gemini(prompt), "gemini"
             elif backend == "groq":
                 logger.info(f"Attempting LLM call via Groq ({config.GROQ_MODEL})...")
-                return _call_groq(prompt)
+                return _call_groq(prompt), "groq"
             elif backend == "ollama":
                 logger.info(f"Attempting LLM call via Ollama ({config.OLLAMA_MODEL})...")
-                return _call_ollama(prompt)
+                return _call_ollama(prompt), "ollama"
             else:
                 logger.warning(f"Unknown backend in fallback list: {backend}")
         except Exception as e:
@@ -178,15 +184,16 @@ def generate_answer(query: str, chunks: list[dict]) -> dict:
         return {
             "answer": "I couldn't find anything relevant in the ingested documents for that question.",
             "sources": [],
+            "backend": None,
         }
 
     context = _format_context(chunks) if chunks else "No additional document context retrieved."
     prompt = f"Context:\n{calc_block}{context}\n\nQuestion: {query}\n\nAnswer:"
 
-    answer = _call_llm(prompt)
+    answer, backend = _call_llm(prompt)
 
     sources = sorted(
         {(c.get("source_file"), c.get("page_start")) for c in chunks},
         key=lambda x: (x[0] or "", x[1] or 0),
     )
-    return {"answer": answer, "sources": sources}
+    return {"answer": answer, "sources": sources, "backend": backend}

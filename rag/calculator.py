@@ -216,46 +216,77 @@ _IDV_INTENT_RE = re.compile(
     r"\b(idv|insured.{0,10}declared[\s\-]?value|declared[\s\-]?value)\b",
     re.IGNORECASE,
 )
+
+# Indian shorthand amounts ("5k", "2.5 lakh", "1.2 Cr") are extremely common in
+# how brokers actually phrase premiums/prices, so every amount pattern below
+# captures an optional multiplier suffix alongside the digits.
+_AMOUNT_MULTIPLIERS = {
+    "k": 1_000, "thousand": 1_000,
+    "l": 100_000, "lakh": 100_000, "lakhs": 100_000, "lac": 100_000, "lacs": 100_000,
+    "cr": 10_000_000, "crore": 10_000_000, "crores": 10_000_000,
+}
+_NUM_SUFFIX = r"(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|lakhs?|lacs?|l|crores?|cr)?"
+
 _PREMIUM_RE = re.compile(
-    r"(?:premium|od|own[\s\-]?damage)\s*(?:is|=|:)?\s*(?:rs\.?|inr|₹)?\s*([\d,]+)(?!(?:st|nd|rd|th)\b)",
+    rf"(?:premium|od|own[\s\-]?damage)\s*(?:is|=|:|of|was)?\s*(?:rs\.?|inr|₹)?\s*{_NUM_SUFFIX}",
     re.IGNORECASE,
 )
+_PRICE_RE = re.compile(
+    rf"(?:price|cost|showroom|ex[\s\-]?showroom)\s*(?:is|=|:|of|was)?\s*(?:rs\.?|inr|₹)?\s*{_NUM_SUFFIX}",
+    re.IGNORECASE,
+)
+_AMOUNT_FALLBACK_RE = re.compile(
+    rf"(?:rs\.?|inr|₹)\s*{_NUM_SUFFIX}|{_NUM_SUFFIX}\s*(?:rs\.?|inr|₹)",
+    re.IGNORECASE,
+)
+
+# Digit-based policy year / renewal ("3rd year", "2nd renewal") and spelled-out
+# ordinals ("second renewal", "third policy year") both need to resolve to a
+# policy_year int. A "renewal" count is offset by one from "year" — the 1st
+# renewal happens entering policy year 2 (see YEAR_TO_PREV_NCB above).
 _YEAR_RE = re.compile(
     r"(\d+)(?:st|nd|rd|th)?\s+(?:policy\s+)?(?:year|yr)s?|(?:year|yr)s?\s+(\d+)",
     re.IGNORECASE,
 )
-_AGE_RE = re.compile(
-    r"(\d+)\s+(?:year(?:s)?(?:\s+old)?|yr(?:s)?(?:\s+old)?)\s+(?:old\s+)?(?:vehicle|bike|scooter|tw|two[\s\-]?wheeler)",
+_RENEWAL_DIGIT_RE = re.compile(r"(\d+)(?:st|nd|rd|th)?\s+renewal", re.IGNORECASE)
+_ORDINAL_WORDS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+}
+_YEAR_OR_RENEWAL_WORD_RE = re.compile(
+    r"\b(" + "|".join(_ORDINAL_WORDS) + r")\s+(?:policy\s+)?(year|renewal)s?\b",
     re.IGNORECASE,
 )
-_PRICE_RE = re.compile(
-    r"(?:price|cost|showroom|ex[\s\-]?showroom)\s*(?:is|=|:)?\s*(?:rs\.?|inr|₹)?\s*([\d,]+)",
+
+_AGE_RE = re.compile(
+    r"(\d+)\s+(?:year(?:s)?(?:\s+old)?|yr(?:s)?(?:\s+old)?)\s+(?:old\s+)?(?:vehicle|bike|scooter|tw|two[\s\-]?wheeler)",
     re.IGNORECASE,
 )
 _CLAIMS_RE = re.compile(
     r"(\d+)\s+claim", re.IGNORECASE
 )
-_AMOUNT_FALLBACK_RE = re.compile(
-    r"(\d[\d,]*)\s*(?:rs\.?|inr|₹)|(?:rs\.?|inr|₹)\s*(\d[\d,]*)",
-    re.IGNORECASE,
-)
 
 
-def _parse_number(s: str) -> Optional[float]:
+def _parse_amount(num_str: str, suffix: str | None) -> Optional[float]:
     try:
-        return float(s.replace(",", ""))
+        val = float(num_str.replace(",", ""))
     except (ValueError, AttributeError):
         return None
+    if suffix:
+        val *= _AMOUNT_MULTIPLIERS.get(suffix.lower(), 1)
+    return val
 
 
 def _extract_premium(query: str) -> Optional[float]:
     """Extract a monetary amount, trying 'premium 5000' then '5000 rs' patterns."""
     m = _PREMIUM_RE.search(query)
     if m:
-        return _parse_number(m.group(1))
+        return _parse_amount(m.group(1), m.group(2))
     m = _AMOUNT_FALLBACK_RE.search(query)
     if m:
-        return _parse_number(m.group(1) or m.group(2))
+        num = m.group(1) or m.group(3)
+        suf = m.group(2) or m.group(4)
+        return _parse_amount(num, suf)
     return None
 
 
@@ -263,10 +294,31 @@ def _extract_price(query: str) -> Optional[float]:
     """Extract a price/cost amount from the query."""
     m = _PRICE_RE.search(query)
     if m:
-        return _parse_number(m.group(1))
+        return _parse_amount(m.group(1), m.group(2))
     m = _AMOUNT_FALLBACK_RE.search(query)
     if m:
-        return _parse_number(m.group(1) or m.group(2))
+        num = m.group(1) or m.group(3)
+        suf = m.group(2) or m.group(4)
+        return _parse_amount(num, suf)
+    return None
+
+
+def _extract_policy_year(query: str) -> Optional[int]:
+    """Resolve a policy year from digit years/renewals or spelled-out ordinals."""
+    m = _YEAR_RE.search(query)
+    if m:
+        raw = m.group(1) or m.group(2)
+        return int(raw) if raw else None
+
+    m = _RENEWAL_DIGIT_RE.search(query)
+    if m:
+        return int(m.group(1)) + 1
+
+    m = _YEAR_OR_RENEWAL_WORD_RE.search(query)
+    if m:
+        n = _ORDINAL_WORDS[m.group(1).lower()]
+        return n + 1 if m.group(2).lower() == "renewal" else n
+
     return None
 
 
@@ -285,21 +337,17 @@ def detect_and_calculate(query: str) -> Optional[dict]:
     # provides NCB + a monetary amount + a year, they want a calculation.
     if _NCB_INTENT_RE.search(query):
         premium = _extract_premium(query)
-        year_match = _YEAR_RE.search(query)
+        year = _extract_policy_year(query)
         claims_match = _CLAIMS_RE.search(query)
 
-        if premium and year_match:
-            year_raw = year_match.group(1) or year_match.group(2)
-            year = int(year_raw) if year_raw else None
+        if premium and year:
             claims = int(claims_match.group(1)) if claims_match else 0
-
-            if year:
-                result = calculate_ncb(premium, year, claims)
-                return {
-                    "calc_type": "ncb",
-                    "result": result,
-                    "formatted_answer": _format_ncb_answer(result),
-                }
+            result = calculate_ncb(premium, year, claims)
+            return {
+                "calc_type": "ncb",
+                "result": result,
+                "formatted_answer": _format_ncb_answer(result),
+            }
 
     # ---- IDV calculation -----------------------------------------------
     # Same approach: IDV intent + price + vehicle age → always calculate.

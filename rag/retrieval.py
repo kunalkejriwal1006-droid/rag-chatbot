@@ -5,9 +5,23 @@ parent-section context expansion.
 Per RAG-Implementations.docx section 7 ("Hybrid Search Design") and
 section 8 ("Parent-Child Retrieval").
 """
+import re
+
 from rag import config, embeddings, keyword_search, vectorstore
 
 RRF_K = 60
+
+# Broad-enumeration queries ("list every add-on", "what are all the exclusions")
+# want most of a category rather than the single best-matching chunk, so the
+# default top_k (tuned for specific questions) misses most of what's asked for.
+ENUMERATION_INTENT_RE = re.compile(
+    r"\b(list|enumerate|name)\s+(all|every|each)\b"
+    r"|\ball\s+(the\s+)?(add-?ons?|covers?|coverages?|exclusions?|sections?|"
+    r"benefits?|endorsements?)\b"
+    r"|\bwhat\s+are\s+all\b"
+    r"|\bhow\s+many\s+(add-?ons?|covers?|exclusions?)\s+(are\s+there|does)\b",
+    re.IGNORECASE,
+)
 
 
 def hybrid_search(
@@ -17,6 +31,8 @@ def hybrid_search(
     expand_context: bool = False,
 ) -> list[dict]:
     top_k = top_k or config.TOP_K
+    if ENUMERATION_INTENT_RE.search(query):
+        top_k = max(top_k, config.ENUMERATION_TOP_K)
     fetch_k = max(top_k * 3, 20)
 
     qvec = embeddings.embed_query(query)

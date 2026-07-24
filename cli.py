@@ -35,6 +35,8 @@ def ask(query: str, filters: dict, expand: bool) -> None:
         for src, page in result["sources"]:
             print(f"  - {src}, p.{page}")
         print()
+    if result["backend"]:
+        print(f"(answered via {result['backend']})\n")
 
 
 def repl() -> None:
