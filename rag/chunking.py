@@ -1,33 +1,9 @@
 """Semantic chunking for insurance PDFs.
 
-Per RAG-Implementations.docx: avoid fixed-size chunking, prefer chunking
-along semantic boundaries. This module implements a two-level strategy:
-
-1. Structural: split each document into sections using heading heuristics
-   (numbered "Section N:" headers, ALL-CAPS headers, known IRDAI policy
-   section names, and add-on titles that precede a "UIN:" line). Sections
-   are the primary semantic unit — a chunk never crosses a section boundary.
-2. Sentence-safe token budgeting: within a section, sentences are grouped
-   greedily into chunks of ~200-600 tokens (never splitting mid-sentence),
-   so each chunk is a coherent, self-contained unit of meaning rather than
-   an arbitrary character slice.
-
-Tables are handled separately per the doc's table decision matrix: small
-lookup/matrix tables (add-on comparison, premium slabs) become a single
-chunk in natural language; large row-oriented tables (vehicle/IDV master
-data) become one chunk per row so each fact is independently retrievable.
-
-Fixes applied (v2):
-- Table-row lines (no sentence-ending punctuation) now flush immediately in
-  _lines_to_sentences() so numeric rows don't bleed into prose chunks.
-- _table_rows_to_lines() strips embedded newlines from pdfplumber multi-line
-  headers and prefixes each row with an explicit "Row N" label + human-readable
-  year/period context so semantic search can match "2nd year" queries.
-- _is_heading() rejects TOC index lines ("5 Depreciation Shield") and
-  city-pincode lines ("KOLKATA - 700 072") that the ALL-CAPS heuristic
-  was incorrectly promoting to section headings.
-- Minimum chunk filter now checks token count (>= 30 tokens) not raw
-  character length, eliminating 3-10 token junk chunks that slipped through.
+Splits each document by heading (never crossing a section boundary), then
+packs sentences within a section into ~200-600 token chunks without ever
+splitting mid-sentence. Tables are chunked separately: small lookup tables
+become one natural-language chunk, big tables get one chunk per row.
 """
 import re
 from dataclasses import dataclass, field
@@ -60,14 +36,9 @@ SECTION_NUM_RE = re.compile(r"^section\s+\d+\s*[:.]\s*\S", re.IGNORECASE)
 SENTENCE_END_RE = re.compile(r'[.!?]["\')]?$')
 SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+(?=[A-Z0-9"\'(])')
 
-# Table-row heuristic: a line that consists almost entirely of numbers, %,
-# dashes, or slashes with very few prose words.  These lines never end in
-# sentence punctuation so they accumulate in _lines_to_sentences() until the
-# next real sentence — causing table numbers to bleed into prose chunks.
-# We flush them immediately instead.
-TABLE_ROW_RE = re.compile(
-    r'^[\s\d%,\.\-/|]+$'  # pure numeric/symbol lines (e.g. NCB slab rows)
-)
+# Numeric table rows never end in sentence punctuation, so without this
+# they'd accumulate into whatever prose sentence comes next.
+TABLE_ROW_RE = re.compile(r'^[\s\d%,\.\-/|]+$')
 
 # TOC-item pattern: "<digit(s)> <Title Case words>" — these are table-of-contents
 # index entries in endorsement libraries, NOT section headings.
@@ -160,12 +131,7 @@ def split_into_sections(pages: list[PageData]) -> list[Section]:
 
 
 def _lines_to_sentences(lines: list) -> list:
-    """Group wrapped PDF lines back into sentences, tracking page span per sentence.
-
-    v2 fix: Table-row lines (pure numbers/symbols with no sentence-ending
-    punctuation) are flushed immediately rather than accumulating into the next
-    real sentence.  This prevents NCB/IDV table rows from bleeding into prose.
-    """
+    """Group wrapped PDF lines back into sentences, tracking page span per sentence."""
     sentences = []
     buf_words: list[str] = []
     buf_page_start = None
@@ -186,9 +152,6 @@ def _lines_to_sentences(lines: list) -> list:
             buf_page_start = page_no
         buf_page_end = page_no
 
-        # Immediately flush pure table-row lines so they don't contaminate prose.
-        # A table-row line is one that contains only digits, %, commas, dashes,
-        # slashes or whitespace (typical of NCB slab / depreciation schedule rows).
         if TABLE_ROW_RE.match(line):
             _flush()
             if line.strip():
@@ -246,15 +209,10 @@ class ChunkRecord:
 
 
 def _table_rows_to_lines(header: list, body: list) -> list:
-    """Serialize table rows to searchable natural-language strings.
-
-    v2 fixes:
-    - Strip embedded newlines from pdfplumber multi-line header cells so BM25
-      doesn't treat 'Policy\nterm\nof\nthe\nExpiring\nPolicy' as 6 tokens.
-    - Prefix each row with 'Row N:' so queries like 'year 2 NCB' can match
-      sequential row numbers (Row 2 = second row = year 2 context).
-    """
-    # Clean header cells — pdfplumber sometimes emits multi-line cell text
+    """Serialize table rows to searchable natural-language strings, e.g.
+    'Row 2: Year: 2; NCB: 20%' so a query like 'year 2 NCB' can match it."""
+    # pdfplumber sometimes emits multi-line cell text, e.g. header cells
+    # split across newlines - flatten those before joining into a row string.
     clean_header = [h.replace("\n", " ").replace("\r", " ").strip() for h in header]
     lines = []
     for row_idx, row in enumerate(body, start=1):
@@ -319,9 +277,6 @@ def chunk_document(
         sentences = _lines_to_sentences(sec.lines)
         for text, p_start, p_end in _group_sentences(sentences, min_tokens, max_tokens):
             text = text.strip()
-            # v2 fix: filter by token count, not character count.
-            # The old `len(text) < 20` (characters) allowed 3-10 token junk chunks
-            # like "5 Depreciation Shield" (22 chars) to pass through.
             if estimate_tokens(text) < MIN_CHUNK_TOKENS:
                 continue
             records.append(

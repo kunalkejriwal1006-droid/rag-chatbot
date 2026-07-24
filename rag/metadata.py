@@ -1,14 +1,7 @@
-"""Per-document metadata.
-
-Insurance metadata is the single highest-leverage thing for retrieval quality
-(see RAG-Implementations.docx, section 4). Rather than guessing product names
-from messy PDF text, we hand-curate a mapping for the documents that are
-known to be in this corpus, and fall back to light heuristics + a UIN regex
-for any new PDF dropped into the folder later.
-
-All documents in this corpus are Bajaj Allianz / Bajaj General Insurance
-Two-Wheeler motor products (confirmed by inspecting each file's first pages
-and cross-checking UIN numbers), so insurer/lob/vehicle_type are constant.
+"""Per-document metadata. Hand-curated per file since guessing product names
+from messy PDF text isn't reliable; new PDFs fall back to heuristics + a UIN
+regex. All documents here are Bajaj Allianz Two-Wheeler motor products, so
+insurer/lob/vehicle_type stay constant.
 """
 import re
 
@@ -18,10 +11,8 @@ VEHICLE_TYPE = "Two Wheeler"
 
 UIN_RE = re.compile(r"UIN[:\s]*([A-Za-z0-9/\.\-]{8,40})")
 
-# Hand-curated per-file metadata, derived by inspecting each PDF's content
-# and cross-referencing UIN numbers (e.g. CO_1 brochure and CO_2 policy
-# wording share UIN IRDAN113RP0026V01200102; CO_8 brochure and CO_9 policy
-# wording share UIN IRDAN113RP0008V01201617).
+# brochure/policy-wording pairs for the same product share a UIN
+# (CO_1/CO_2, CO_8/CO_9)
 DOCUMENT_METADATA = {
     "BAJAJ ALLIANZ GENERAL INSURANCE CO_1.pdf": {
         "product": "Two Wheeler Package Policy",
@@ -92,12 +83,8 @@ DOCUMENT_METADATA = {
 
 
 def get_base_metadata(filename: str, sample_text: str = "") -> dict:
-    """Return base (document-level) metadata for a PDF filename.
-
-    Uses the curated mapping when available; otherwise falls back to a
-    generic heuristic so new PDFs dropped into the folder don't crash
-    ingestion, they just get coarser metadata.
-    """
+    """Return document-level metadata for a PDF filename, falling back to
+    heuristics for files not in DOCUMENT_METADATA."""
     override = DOCUMENT_METADATA.get(filename)
     uin = None
     if sample_text:

@@ -1,9 +1,6 @@
 """Hybrid retrieval: vector search + BM25 keyword search, combined via
 Reciprocal Rank Fusion (RRF), plus optional metadata filtering and
 parent-section context expansion.
-
-Per RAG-Implementations.docx section 7 ("Hybrid Search Design") and
-section 8 ("Parent-Child Retrieval").
 """
 import re
 
@@ -11,9 +8,8 @@ from rag import config, embeddings, keyword_search, vectorstore
 
 RRF_K = 60
 
-# Broad-enumeration queries ("list every add-on", "what are all the exclusions")
-# want most of a category rather than the single best-matching chunk, so the
-# default top_k (tuned for specific questions) misses most of what's asked for.
+# "list every add-on" style queries need most of a category, not just the
+# single best-matching chunk, so bump top_k when this matches.
 ENUMERATION_INTENT_RE = re.compile(
     r"\b(list|enumerate|name)\s+(all|every|each)\b"
     r"|\ball\s+(the\s+)?(add-?ons?|covers?|coverages?|exclusions?|sections?|"
@@ -62,13 +58,9 @@ def hybrid_search(
 def _expand_to_parent_section(chunk: dict, window: int = 4) -> dict:
     """Pull in neighboring chunks (by chunk_index) so the LLM sees full context.
 
-    v2: Uses scroll_by_index_range() (proximity by chunk_index in same file)
-    instead of scroll_by() (match by section name).  The old approach failed
-    because:
-    - Table row sections are unique per-row → only 1 sibling returned (the
-      row itself), so the LLM never saw the rest of the NCB/IDV table.
-    - Generic sections like 'Conditions' exist in 20+ add-ons → random
-      sibling chunks from unrelated add-ons were injected, causing contradictions.
+    Uses index proximity rather than matching on section name - table rows
+    each have a unique section name, and generic names like "Conditions"
+    are shared across unrelated add-ons.
     """
     src = chunk.get("source_file", "")
     center_idx = chunk.get("chunk_index", 0)

@@ -1,19 +1,12 @@
 """LLM answer generation, grounded strictly in retrieved context.
 
-Supports dynamic fallback across three backends:
-  1. "gemini" — Google Gemini API (preferred)
-  2. "groq"   — Groq cloud API (fast fallback)
-  3. "ollama" — Ollama local inference (slow fallback)
+Falls back gemini -> groq -> ollama (order set by LLM_FALLBACK_ORDER).
 """
 
 import logging
 from rag import calculator, config
 
 logger = logging.getLogger("rag.generation")
-
-# ---------------------------------------------------------------------------
-# Lazy Initializers for Clients
-# ---------------------------------------------------------------------------
 
 _gemini_client = None
 _groq_client = None
@@ -62,10 +55,6 @@ For calculation questions:
 """
 
 
-# ---------------------------------------------------------------------------
-# Individual Backend Callers
-# ---------------------------------------------------------------------------
-
 def _call_gemini(prompt: str) -> str:
     client = _get_gemini_client()
     # pyrefly: ignore [missing-import]
@@ -107,18 +96,9 @@ def _call_ollama(prompt: str) -> str:
     return resp["message"]["content"]
 
 
-# ---------------------------------------------------------------------------
-# LLM call abstraction with dynamic fallback
-# ---------------------------------------------------------------------------
-
 def _call_llm(prompt: str) -> tuple[str, str]:
-    """Try to get a response using configured backends in fallback order.
-
-    Returns (answer_text, backend_name) so callers can surface which backend
-    actually answered -- otherwise a silent Gemini quota failure looks
-    identical to a normal Gemini answer, which makes debugging fallback
-    behavior (and its very different latency/quality per backend) opaque.
-    """
+    """Returns (answer_text, backend_name) - callers show which backend
+    actually answered, since a fallback shouldn't be invisible."""
     errors = []
     for backend in config.LLM_FALLBACK_ORDER:
         try:
@@ -138,18 +118,12 @@ def _call_llm(prompt: str) -> tuple[str, str]:
             logger.warning(err_msg)
             errors.append(err_msg)
 
-    # If all backends failed
     raise RuntimeError(
         "All LLM backends in fallback order failed. Errors:\n" + "\n".join(errors)
     )
 
 
-# ---------------------------------------------------------------------------
-# Context formatting
-# ---------------------------------------------------------------------------
-
 def _format_context(chunks: list[dict]) -> str:
-    """Formats context chunks for the LLM, keeping citations clean."""
     formatted_blocks = []
     used_sources = []
 
@@ -165,12 +139,7 @@ def _format_context(chunks: list[dict]) -> str:
     return f"Context:\n{context_text}\n\nSources for reference: {unique_sources}"
 
 
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
-
 def generate_answer(query: str, chunks: list[dict]) -> dict:
-    # --- Deterministic math short-circuit -----------------------------------
     calc = calculator.detect_and_calculate(query)
     calc_block = ""
     if calc:

@@ -23,7 +23,6 @@ Commands:
 
 
 def ask(query: str, filters: dict, expand: bool) -> None:
-    # This searches your local Qdrant/BM25 index
     chunks = retrieval.hybrid_search(
         query, top_k=config.TOP_K, filters=filters or None, expand_context=expand
     )

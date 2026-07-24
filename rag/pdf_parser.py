@@ -1,10 +1,8 @@
 """PDF parsing: per-page text (PyMuPDF) + per-page table detection (pdfplumber).
 
-PyMuPDF gives cleaner running text (better ligature/whitespace handling) so
-it is used for the prose that feeds section/paragraph chunking. pdfplumber
-is used only for its grid-line table detector, since insurance PDFs put
-their highest-value facts (premium slabs, IDV tables, add-on matrices) in
-actual tables per RAG-Implementations.docx.
+PyMuPDF handles the running text (cleaner whitespace/ligatures); pdfplumber
+is only used for its grid-line table detector, since the premium/IDV/add-on
+tables carry most of the high-value facts.
 """
 from dataclasses import dataclass, field
 from pathlib import Path

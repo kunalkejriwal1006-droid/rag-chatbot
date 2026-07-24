@@ -109,18 +109,7 @@ def scroll_by_index_range(
     center_index: int,
     window: int = 4,
 ) -> list[dict]:
-    """Fetch chunks from the same source file within ±window of center_index.
-
-    This is the v2 parent-child expansion method.  The original scroll_by()
-    matched on section name, which failed for two reasons:
-    - Table rows each have a unique section name ("Table (p.5) row 2") so only
-      one row was ever returned, never the full table.
-    - Generic section names like "Conditions" are shared by 20+ different
-      add-ons and returned random chunks from unrelated add-ons.
-
-    Matching by chunk_index proximity within the same file gives us the actual
-    neighboring chunks regardless of section-name accuracy.
-    """
+    """Fetch chunks from the same source file within +/-window of center_index."""
     from qdrant_client.models import Range, FieldCondition as FC, Filter as F
     client = get_client()
     lo = max(0, center_index - window)
