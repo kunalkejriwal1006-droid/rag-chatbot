@@ -1,0 +1,12 @@
+[tool.pyrefly]
+python_interpreter = ".venv/Scripts/python.exe"
+search_path = ["."]
+ignore = [
+    ".venv",
+    "data",
+    "__pycache__",
+]
+
+[tool.pyrefly.errors]
+# Suppress errors for third-party libs that lack stubs
+missing-imports = false
