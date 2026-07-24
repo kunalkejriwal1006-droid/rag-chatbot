@@ -27,18 +27,14 @@ def ask(query: str, filters: dict, expand: bool) -> None:
     chunks = retrieval.hybrid_search(
         query, top_k=config.TOP_K, filters=filters or None, expand_context=expand
     )
-    
-    # Print retrieved chunks to the terminal so you can see them
-    print(f"\n[DEBUG] Found {len(chunks)} relevant chunks:")
-    for i, chunk in enumerate(chunks):
-        print(f"\n--- Chunk {i+1} ---")
-        print(f"File: {chunk.get('source_file')}")
-        print(f"Section: {chunk.get('section')}")
-        print(f"Content: {chunk.get('text')}")
-    
-    # Comment this out to stop Gemini from running and causing the 429 error
-    # result = generation.generate_answer(query, chunks)
-    # print("\n" + result["answer"] + "\n")
+
+    result = generation.generate_answer(query, chunks)
+    print("\n" + result["answer"] + "\n")
+    if result["sources"]:
+        print("Sources:")
+        for src, page in result["sources"]:
+            print(f"  - {src}, p.{page}")
+        print()
 
 
 def repl() -> None:
